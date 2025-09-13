@@ -10,10 +10,6 @@ rustPlatform.buildRustPackage rec {
 
   src = ./.;
 
-  postInstall = ''
-    cp -r static $out/static
-  '';
-
   buildInputs = [
     openssl
   ];
