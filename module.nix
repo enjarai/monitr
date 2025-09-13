@@ -86,7 +86,7 @@
 
           environment = {
             ADDRESS = cfg.address;
-            PORT = cfg.port;
+            PORT = toString cfg.port;
             TOKEN = cfg.token;
           };
         };
