@@ -1,17 +1,19 @@
 use std::env;
 
-use actix_web::{get, http::header::ContentType, post, web::Json, App, HttpRequest, HttpResponse, HttpServer, Responder};
+use actix_web::{get, http::header::ContentType, post, web::{Json, Query}, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use anyhow::{anyhow, Context as _, Result};
 use env_logger::Target;
 use log::{error, info, LevelFilter};
 use once_cell::sync::Lazy;
 use prometheus::{register_int_gauge, Encoder as _, IntGauge, TextEncoder};
+use reqwest::Client;
 use serde::Deserialize;
 
 static HEARTRATE_GAUGE: Lazy<IntGauge> =
     Lazy::new(|| register_int_gauge!("bang_heartrate", "The amount of clients listening for clicks").unwrap());
 
 struct Token(String);
+struct TrainToken(String);
 
 #[derive(Deserialize)]
 struct Stats {
@@ -28,10 +30,12 @@ async fn main() -> Result<()> {
     let addr = env::var("ADDRESS")?;
     let port = env::var("PORT")?.parse::<u16>()?;
     let token = env::var("TOKEN")?;
+    let train_token = env::var("TRAIN_TOKEN")?;
 
     let server = HttpServer::new(move || {
         App::new()
             .app_data(Token(token.clone()))
+            .app_data(TrainToken(train_token.clone()))
             .service(stats)
             .service(metrics)
     })
@@ -75,4 +79,29 @@ async fn metrics(_req: HttpRequest) -> impl Responder {
     HttpResponse::Ok()
         .append_header(ContentType::plaintext())
         .body(buffer)
+}
+
+#[get("/trains")]
+async fn trains(req: HttpRequest, current_time_string: Query<String>, from: Query<String>, to: Query<String>) -> impl Responder {
+    let token = &req.app_data::<Token>().unwrap().0;
+    let train_token = &req.app_data::<TrainToken>();
+    if let Some(value) = req.headers().get("Authorization") 
+            && let Ok(header) = value.to_str()
+            && header.starts_with("Bearer ")
+            && header["Bearer ".len()..header.len()] == *token
+            && let Some(train_token) = train_token {
+        let url = format!("https://gateway.apiportal.ns.nl/reisinformatie-api/api/v3/trips?dateTime={}&fromStation={}&toStation={}", current_time_string, from, to);
+        
+        let client = Client::new();
+        let res = client.get(url)
+            .header("Ocp-Apim-Subscription-Key", train_token.0)
+            .send()
+            .await?;
+
+        HttpResponse::Ok()
+            .append_header(ContentType::plaintext())
+            .json()
+    } else {
+        HttpResponse::NotFound()
+    }
 }
