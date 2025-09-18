@@ -2,6 +2,7 @@ use std::env;
 
 use actix_web::{get, http::header::ContentType, post, web::{Json, Query}, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use anyhow::{anyhow, Context as _, Result};
+use chrono::{DateTime, Local};
 use env_logger::Target;
 use log::{error, info, LevelFilter};
 use once_cell::sync::Lazy;
@@ -14,6 +15,13 @@ static HEARTRATE_GAUGE: Lazy<IntGauge> =
 
 struct Token(String);
 struct TrainToken(String);
+
+#[derive(Deserialize)]
+struct TrainQuery {
+    current_time_string: String,
+    from: String,
+    to: String,
+}
 
 #[derive(Deserialize)]
 struct TrainTrips {
@@ -108,7 +116,7 @@ async fn metrics(_req: HttpRequest) -> impl Responder {
 }
 
 #[get("/trains")]
-async fn trains(req: HttpRequest, current_time_string: Query<String>, from: Query<String>, to: Query<String>) -> impl Responder {
+async fn trains(req: HttpRequest, query: Query<TrainQuery>) -> impl Responder {
     let token = &req.app_data::<Token>().unwrap().0;
     let train_token = &req.app_data::<TrainToken>();
     if let Some(value) = req.headers().get("Authorization") 
@@ -116,7 +124,10 @@ async fn trains(req: HttpRequest, current_time_string: Query<String>, from: Quer
             && header.starts_with("Bearer ")
             && header["Bearer ".len()..header.len()] == *token
             && let Some(train_token) = train_token {
-        let url = format!("https://gateway.apiportal.ns.nl/reisinformatie-api/api/v3/trips?dateTime={}&fromStation={}&toStation={}", current_time_string, from, to);
+        let url = format!(
+            "https://gateway.apiportal.ns.nl/reisinformatie-api/api/v3/trips?dateTime={}&fromStation={}&toStation={}", 
+            query.current_time_string, query.from, query.to
+        );
         
         match fetch_trains(&url, train_token).await {
             Ok(r) => r,
@@ -137,13 +148,26 @@ async fn fetch_trains(url: &str, train_token: &TrainToken) -> Result<HttpRespons
         .await?;
     let json = res.json::<TrainTrips>().await?;
 
-    Ok(HttpResponse::Ok()
-        .append_header(ContentType::plaintext())
-        .json(&json.trips
-            .get(0)
-            .ok_or(anyhow!("No trip?"))?
-            .legs
-            .get(0)
-            .ok_or(anyhow!("No legs?"))?
-            .origin))
+    let now = Local::now();
+    let trip = json.trips.iter().find(|t| match t.legs.get(0) {
+        Some(l) => {
+            let str = &l.origin.actualDateTime;
+            match DateTime::parse_from_rfc3339(&format!("{}:00", &str[..str.len() - 2])) {
+            Ok(t) => t > now,
+            Err(e) => todo!("{}", e),
+        }},
+        None => todo!("test"),
+    });
+
+    Ok(match trip {
+        Some(t) => HttpResponse::Ok()
+            .append_header(ContentType::plaintext())
+            .json(&t
+                .legs
+                .get(0)
+                .ok_or(anyhow!("No legs?"))?
+                .origin),
+        None => HttpResponse::NotFound()
+            .finish(),
+    })
 }
