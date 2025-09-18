@@ -63,6 +63,7 @@ async fn main() -> Result<()> {
             .app_data(TrainToken(train_token.clone()))
             .service(stats)
             .service(metrics)
+            .service(trains)
     })
     .bind((addr, port))
     .context("Failed to bind address")?;
