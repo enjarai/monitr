@@ -7,13 +7,38 @@ use log::{error, info, LevelFilter};
 use once_cell::sync::Lazy;
 use prometheus::{register_int_gauge, Encoder as _, IntGauge, TextEncoder};
 use reqwest::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 static HEARTRATE_GAUGE: Lazy<IntGauge> =
     Lazy::new(|| register_int_gauge!("bang_heartrate", "The amount of clients listening for clicks").unwrap());
 
 struct Token(String);
 struct TrainToken(String);
+
+#[derive(Deserialize)]
+struct TrainTrips {
+    trips: Vec<Trip>,
+}
+
+#[derive(Deserialize)]
+struct Trip {
+    legs: Vec<Leg>,
+}
+
+#[derive(Deserialize)]
+struct Leg {
+    origin: LegStation,
+}
+
+#[allow(non_snake_case)]
+#[derive(Deserialize, Serialize)]
+struct LegStation {
+    stationCode: String,
+    plannedDateTime: String,
+    actualDateTime: String,
+    plannedTrack: String,
+    actualTrack: String,
+}
 
 #[derive(Deserialize)]
 struct Stats {
@@ -92,16 +117,32 @@ async fn trains(req: HttpRequest, current_time_string: Query<String>, from: Quer
             && let Some(train_token) = train_token {
         let url = format!("https://gateway.apiportal.ns.nl/reisinformatie-api/api/v3/trips?dateTime={}&fromStation={}&toStation={}", current_time_string, from, to);
         
-        let client = Client::new();
-        let res = client.get(url)
-            .header("Ocp-Apim-Subscription-Key", train_token.0)
-            .send()
-            .await?;
-
-        HttpResponse::Ok()
-            .append_header(ContentType::plaintext())
-            .json()
+        match fetch_trains(&url, train_token).await {
+            Ok(r) => r,
+            Err(e) => HttpResponse::InternalServerError()
+                .body(format!("{}", e)),
+        }
     } else {
         HttpResponse::NotFound()
+            .finish()
     }
+}
+
+async fn fetch_trains(url: &str, train_token: &TrainToken) -> Result<HttpResponse> {
+    let client = Client::new();
+    let res = client.get(url)
+        .header("Ocp-Apim-Subscription-Key", train_token.0.clone())
+        .send()
+        .await?;
+    let json = res.json::<TrainTrips>().await?;
+
+    Ok(HttpResponse::Ok()
+        .append_header(ContentType::plaintext())
+        .json(&json.trips
+            .get(0)
+            .ok_or(anyhow!("No trip?"))?
+            .legs
+            .get(0)
+            .ok_or(anyhow!("No legs?"))?
+            .origin))
 }

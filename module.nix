@@ -61,6 +61,11 @@
         type = str;
         description = "The auth token.";
       };
+
+      train_token = mkOption {
+        type = str;
+        description = "The token to use for the NS trains api.";
+      };
     };
 
     config = mkIf cfg.enable {
@@ -88,6 +93,7 @@
             ADDRESS = cfg.address;
             PORT = toString cfg.port;
             TOKEN = cfg.token;
+            TRAIN_TOKEN = cfg.train_token;
           };
         };
       };
